@@ -1,5 +1,7 @@
 import subprocess
 import os
+import re
+from urllib.parse import urlparse
 from flask import Flask, render_template, request, send_file, jsonify
 import pdfkit
 import threading
@@ -24,6 +26,21 @@ def clear_output_dir():
         if os.path.isfile(file_path):
             open(file_path, 'w').close()
 
+def extract_domain(url_or_domain):
+    parsed = urlparse(url_or_domain)
+    return parsed.netloc if parsed.netloc else parsed.path
+
+def get_ip_from_nslookup(domain):
+    try:
+        result = subprocess.run(["nslookup", domain], capture_output=True, text=True, timeout=10)
+        output = result.stdout
+        match = re.search(r"Address:\s*([\d\.]+)", output)
+        if match:
+            return match.group(1), output
+        return None, output
+    except Exception as e:
+        return None, f"Error resolving IP: {e}"
+
 def run_command(cmd, output_file, step_name):
     try:
         update_progress(f"Running {step_name}...")
@@ -45,11 +62,30 @@ def run_command(cmd, output_file, step_name):
             out.write(f"ERROR: Failed to run command: {e}\n")
 
 def run_recon(target):
-    run_command(["whois", target], f"{OUTPUT_DIR}/whois.txt", "Whois")
-    run_command(["nslookup", target], f"{OUTPUT_DIR}/nslookup.txt", "NSLookup")
-    run_command(["masscan", target, "-p1-1000", "--rate", "1000"], f"{OUTPUT_DIR}/masscan.txt", "Masscan")
-    run_command(["nmap", "-sV", target], f"{OUTPUT_DIR}/nmap.txt", "Nmap")
-    run_command(["whatweb", target], f"{OUTPUT_DIR}/whatweb.txt", "WhatWeb")
+    domain = extract_domain(target)
+    
+    # Whois
+    run_command(["whois", domain], f"{OUTPUT_DIR}/whois.txt", "Whois")
+    
+    # NSLookup
+    ip, nslookup_output = get_ip_from_nslookup(domain)
+    with open(f"{OUTPUT_DIR}/nslookup.txt", "w") as f:
+        f.write(nslookup_output)
+    
+    # Masscan (IP required)
+    if ip:
+        run_command(["sudo", "masscan", ip, "-p1-1000", "--rate", "1000"], f"{OUTPUT_DIR}/masscan.txt", "Masscan")
+    else:
+        update_progress("IP resolution failed. Skipping Masscan.")
+        with open(f"{OUTPUT_DIR}/masscan.txt", "w") as f:
+            f.write("[!] Failed to resolve IP for masscan.\n")
+    
+    # Nmap (can use domain)
+    run_command(["nmap", "-sV", domain], f"{OUTPUT_DIR}/nmap.txt", "Nmap")
+    
+    # WhatWeb (full URL)
+    url = f"https://{domain}" if not target.startswith("http") else target
+    run_command(["whatweb", url], f"{OUTPUT_DIR}/whatweb.txt", "WhatWeb")
 
 def run_scanning(target):
     url = f"https://{target}" if not target.startswith("http") else target
@@ -139,5 +175,7 @@ def download_pdf():
     return send_file("output/report.pdf", as_attachment=True, download_name="recon_report.pdf")
 
 if __name__ == "__main__":
-    app.run(debug=False)
+ app.run(host="0.0.0.0", port=5000, debug=False)
+
+
 

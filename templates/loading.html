@@ -5,44 +5,82 @@
   <title>Scanning in Progress</title>
   <style>
     body {
-      font-family: Arial, sans-serif;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(to right, #f0f4ff, #e4f0ff);
+      margin: 0;
+      padding: 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      color: #222;
+    }
+
+    .container {
+      background: #ffffff;
+      padding: 35px 40px;
+      border-radius: 16px;
+      box-shadow: 0 12px 35px rgba(0, 0, 0, 0.1);
+      max-width: 650px;
+      width: 100%;
       text-align: center;
-      padding: 50px;
+      transition: all 0.3s ease-in-out;
     }
+
     .loader {
-      border: 10px solid #f3f3f3;
-      border-top: 10px solid #3498db;
+      width: 70px;
+      height: 70px;
+      border: 6px solid #d0dfff;
+      border-top: 6px solid #4a90e2;
       border-radius: 50%;
-      width: 80px;
-      height: 80px;
-      animation: spin 1s linear infinite;
       margin: 20px auto;
+      animation: spin 1s linear infinite;
     }
+
     @keyframes spin {
       0% { transform: rotate(0deg); }
       100% { transform: rotate(360deg); }
     }
+
+    h1 {
+      font-size: 26px;
+      color: #2c3e50;
+      margin-bottom: 10px;
+    }
+
+    p {
+      font-size: 15px;
+      color: #6c7a89;
+      margin-bottom: 15px;
+    }
+
     #progress-log {
-      margin-top: 30px;
+      margin-top: 25px;
       text-align: left;
-      max-width: 600px;
-      margin-left: auto;
-      margin-right: auto;
-      border: 1px solid #ccc;
-      padding: 15px;
-      border-radius: 8px;
-      background-color: #f9f9f9;
-      height: 300px;
-      overflow-y: scroll;
+      border: 1px solid #cbd6e2;
+      padding: 18px;
+      border-radius: 10px;
+      background-color: #f9fbff;
+      height: 260px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 13px;
+      color: #34495e;
+    }
+
+    #progress-log p {
+      margin: 5px 0;
     }
   </style>
 </head>
 <body>
-  <h1>Scanning: Please wait...</h1>
-  <div class="loader"></div>
-  <p>This may take a few minutes depending on the scan size.</p>
+  <div class="container">
+    <h1>Scanning in Progress...</h1>
+    <div class="loader"></div>
+    <p>This may take a few minutes depending on the scan size.</p>
 
-  <div id="progress-log"></div>
+    <div id="progress-log"></div>
+  </div>
 
   <script>
     function fetchProgress() {
