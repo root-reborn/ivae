@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Scanning in Progress</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      padding: 50px;
+    }
+    .loader {
+      border: 10px solid #f3f3f3;
+      border-top: 10px solid #3498db;
+      border-radius: 50%;
+      width: 80px;
+      height: 80px;
+      animation: spin 1s linear infinite;
+      margin: 20px auto;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    #progress-log {
+      margin-top: 30px;
+      text-align: left;
+      max-width: 600px;
+      margin-left: auto;
+      margin-right: auto;
+      border: 1px solid #ccc;
+      padding: 15px;
+      border-radius: 8px;
+      background-color: #f9f9f9;
+      height: 300px;
+      overflow-y: scroll;
+    }
+  </style>
+</head>
+<body>
+  <h1>Scanning: Please wait...</h1>
+  <div class="loader"></div>
+  <p>This may take a few minutes depending on the scan size.</p>
+
+  <div id="progress-log"></div>
+
+  <script>
+    function fetchProgress() {
+      fetch("/progress")
+        .then(res => res.json())
+        .then(data => {
+          const logBox = document.getElementById("progress-log");
+          logBox.innerHTML = "";
+
+          data.steps.forEach(step => {
+            const p = document.createElement("p");
+            p.textContent = `[${step.timestamp}] ${step.message}`;
+            logBox.appendChild(p);
+          });
+
+          logBox.scrollTop = logBox.scrollHeight;
+
+          if (data.status === "Completed") {
+            window.location.href = "/report";
+          } else {
+            setTimeout(fetchProgress, 2000);
+          }
+        })
+        .catch(err => {
+          console.error("Error fetching progress:", err);
+          setTimeout(fetchProgress, 3000);
+        });
+    }
+
+    fetchProgress();
+  </script>
+</body>
+</html>
+
