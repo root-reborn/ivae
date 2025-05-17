@@ -38,23 +38,37 @@ def get_ip_from_nslookup(domain):
     try:
         result = subprocess.run(["nslookup", domain], capture_output=True, text=True, timeout=10)
         output = result.stdout
-        match = re.search(r"Address:\s*([\d\.]+)", output)
-        if match:
-            return match.group(1), output
+        matches = re.findall(r"Address:\s*([\d\.]+)", output)
+        if matches:
+            ip_address = matches[-1]
+            return ip_address, output
         return None, output
     except Exception as e:
         return None, f"Error resolving IP: {e}"
 
-def run_command(cmd, output_file, step_name):
+ANSI_ESCAPE_RE = re.compile(r'\x1B\[[0-?]*[ -/]*[@-~]')
+
+def strip_ansi(text):
+    return ANSI_ESCAPE_RE.sub('', text)
+
+def run_command(cmd, output_file, step_name, strip_ansi_output=False):
     try:
         update_progress(f"Running {step_name}...")
         with open(output_file, "w") as out:
             out.write(f"Running command: {' '.join(cmd)}\n\n")
             result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
-            out.write(result.stdout.decode(errors="ignore"))
-            if result.stderr:
+            stdout = result.stdout.decode(errors="ignore")
+            stderr = result.stderr.decode(errors="ignore")
+
+            if strip_ansi_output:
+                stdout = strip_ansi(stdout)
+                stderr = strip_ansi(stderr)
+
+            out.write(stdout)
+            if stderr:
                 out.write("\n--- STDERR ---\n")
-                out.write(result.stderr.decode(errors="ignore"))
+                out.write(stderr)
+
         update_progress(f"{step_name} completed.")
     except subprocess.TimeoutExpired:
         update_progress(f"{step_name} timed out.")
@@ -76,16 +90,16 @@ def run_recon(target):
         f.write(nslookup_output)
 
     if ip:
-        run_command(["sudo", "masscan", ip, "-p1-1000", "--rate", "1000"], f"{OUTPUT_DIR}/masscan_{timestamp}.txt", "Masscan")
+        run_command(["sudo", "masscan", ip, "-p1-1000"], f"{OUTPUT_DIR}/masscan_{timestamp}.txt", "Masscan")
     else:
         update_progress("IP resolution failed. Skipping Masscan.")
         with open(f"{OUTPUT_DIR}/masscan_{timestamp}.txt", "w") as f:
             f.write("[!] Failed to resolve IP for masscan.\n")
 
-    run_command(["nmap", "-sV", domain], f"{OUTPUT_DIR}/nmap_{timestamp}.txt", "Nmap")
+    run_command(["dnsrecon", "-d", domain, "-a"], f"{OUTPUT_DIR}/dnsrecon_{timestamp}.txt", "DNSRecon")
 
     url = f"https://{domain}" if not target.startswith("http") else target
-    run_command(["whatweb", url], f"{OUTPUT_DIR}/whatweb_{timestamp}.txt", "WhatWeb")
+    run_command(["wappalyzer", "-i", url], f"{OUTPUT_DIR}/wappalyzer_{timestamp}.txt", "Wappalyzer", strip_ansi_output=True)
 
 def run_cve_scan(target):
     timestamp = progress["timestamp"]
@@ -128,10 +142,11 @@ def quick_scan(target):
             f.write("[!] Failed to resolve IP for masscan.\n")
 
     url = f"https://{domain}" if not target.startswith("http") else target
-    run_command(["whatweb", url], f"{OUTPUT_DIR}/whatweb_{timestamp}.txt", "WhatWeb")
+    run_command(["wappalyzer", "-i", url], f"{OUTPUT_DIR}/wappalyzer_{timestamp}.txt", "Wappalyzer", strip_ansi_output=True)
 
-    # Create empty files for tools not used
-    for fname in ["nmap", "sqlmap", "xsstrike", "nuclei", "nuclei.json"]:
+    run_command(["dnsrecon", "-d", domain, "-a"], f"{OUTPUT_DIR}/dnsrecon_{timestamp}.txt", "DNSRecon")
+
+    for fname in ["sqlmap", "xsstrike", "nuclei", "nuclei.json"]:
         open(os.path.join(OUTPUT_DIR, f"{fname}_{timestamp}.txt"), 'w').close()
 
 def count_cve_severities():
@@ -179,7 +194,6 @@ def index():
             progress["status"] = "Completed"
 
         threading.Thread(target=run_selected_scan).start()
-
         return render_template("loading.html", target=target)
 
     return render_template("form.html")
@@ -196,8 +210,8 @@ def report():
         "whois": load_output("whois"),
         "nslookup": load_output("nslookup"),
         "masscan": load_output("masscan"),
-        "nmap": load_output("nmap"),
-        "whatweb": load_output("whatweb"),
+        "dnsrecon": load_output("dnsrecon"),
+        "whatweb": load_output("wappalyzer"),
         "sqlmap": load_output("sqlmap"),
         "xsstrike": load_output("xsstrike"),
         "cve_counts": count_cve_severities()
@@ -212,8 +226,8 @@ def download_html():
         whois=load_output("whois"),
         nslookup=load_output("nslookup"),
         masscan=load_output("masscan"),
-        nmap=load_output("nmap"),
-        whatweb=load_output("whatweb"),
+        dnsrecon=load_output("dnsrecon"),
+        whatweb=load_output("wappalyzer"),
         sqlmap=load_output("sqlmap"),
         xsstrike=load_output("xsstrike"),
         cve_counts=count_cve_severities()
@@ -231,8 +245,8 @@ def download_pdf():
         whois=load_output("whois"),
         nslookup=load_output("nslookup"),
         masscan=load_output("masscan"),
-        nmap=load_output("nmap"),
-        whatweb=load_output("whatweb"),
+        dnsrecon=load_output("dnsrecon"),
+        whatweb=load_output("wappalyzer"),
         sqlmap=load_output("sqlmap"),
         xsstrike=load_output("xsstrike"),
         cve_counts=count_cve_severities()
