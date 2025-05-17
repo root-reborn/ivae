@@ -30,6 +30,23 @@
             margin-bottom: 20px;
         }
 
+        .scan-options {
+            margin-bottom: 20px;
+        }
+
+        .scan-options label {
+            margin: 0 15px;
+            cursor: pointer;
+            font-size: 16px;
+            color: #66fcf1;
+        }
+
+        input[type="radio"] {
+            margin-right: 8px;
+            transform: scale(1.2);
+            accent-color: #66fcf1;
+        }
+
         button {
             padding: 10px 25px;
             font-size: 16px;
@@ -57,7 +74,16 @@
 
     <form method="POST">
         <input type="text" name="target" placeholder="e.g. example.com" required>
-        <br>
+        <div class="scan-options">
+            <label>
+                <input type="radio" name="scan_type" value="quick" required>
+                ⚡ Quick Scan
+            </label>
+            <label>
+                <input type="radio" name="scan_type" value="full">
+                🧪 Full Scan
+            </label>
+        </div>
         <button type="submit">Start Recon</button>
     </form>
 

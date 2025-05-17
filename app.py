@@ -1,11 +1,13 @@
 import subprocess
 import os
 import re
+import json
 from urllib.parse import urlparse
 from flask import Flask, render_template, request, send_file, jsonify
 import pdfkit
 import threading
 import time
+from collections import Counter
 
 app = Flask(__name__)
 OUTPUT_DIR = "output"
@@ -13,7 +15,9 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 progress = {
     "status": "Idle",
-    "steps": []
+    "steps": [],
+    "scan_type": "full",
+    "timestamp": time.strftime("%Y%m%d_%H%M%S")
 }
 
 def update_progress(message):
@@ -63,75 +67,118 @@ def run_command(cmd, output_file, step_name):
 
 def run_recon(target):
     domain = extract_domain(target)
-    
-    # Whois
-    run_command(["whois", domain], f"{OUTPUT_DIR}/whois.txt", "Whois")
-    
-    # NSLookup
+    timestamp = progress["timestamp"]
+
+    run_command(["whois", domain], f"{OUTPUT_DIR}/whois_{timestamp}.txt", "Whois")
+
     ip, nslookup_output = get_ip_from_nslookup(domain)
-    with open(f"{OUTPUT_DIR}/nslookup.txt", "w") as f:
+    with open(f"{OUTPUT_DIR}/nslookup_{timestamp}.txt", "w") as f:
         f.write(nslookup_output)
-    
-    # Masscan (IP required)
+
     if ip:
-        run_command(["sudo", "masscan", ip, "-p1-1000", "--rate", "1000"], f"{OUTPUT_DIR}/masscan.txt", "Masscan")
+        run_command(["sudo", "masscan", ip, "-p1-1000", "--rate", "1000"], f"{OUTPUT_DIR}/masscan_{timestamp}.txt", "Masscan")
     else:
         update_progress("IP resolution failed. Skipping Masscan.")
-        with open(f"{OUTPUT_DIR}/masscan.txt", "w") as f:
+        with open(f"{OUTPUT_DIR}/masscan_{timestamp}.txt", "w") as f:
             f.write("[!] Failed to resolve IP for masscan.\n")
-    
-    # Nmap (can use domain)
-    run_command(["nmap", "-sV", domain], f"{OUTPUT_DIR}/nmap.txt", "Nmap")
-    
-    # WhatWeb (full URL)
+
+    run_command(["nmap", "-sV", domain], f"{OUTPUT_DIR}/nmap_{timestamp}.txt", "Nmap")
+
     url = f"https://{domain}" if not target.startswith("http") else target
-    run_command(["whatweb", url], f"{OUTPUT_DIR}/whatweb.txt", "WhatWeb")
+    run_command(["whatweb", url], f"{OUTPUT_DIR}/whatweb_{timestamp}.txt", "WhatWeb")
+
+def run_cve_scan(target):
+    timestamp = progress["timestamp"]
+    url = f"https://{target}" if not target.startswith("http") else target
+    run_command([
+        "nuclei", "-u", url,
+        "-severity", "low,medium,high,critical",
+        "-json", "-o", f"{OUTPUT_DIR}/nuclei_{timestamp}.json"
+    ], f"{OUTPUT_DIR}/nuclei_{timestamp}.txt", "Nuclei CVE Scan")
 
 def run_scanning(target):
+    timestamp = progress["timestamp"]
     url = f"https://{target}" if not target.startswith("http") else target
 
     sqlmap_cmd = [
-        "sqlmap",
-        "-u", url,
-        "--technique=BEUSTQ",
-        "--crawl", "3",
-        "--batch",
-        "--threads", "8"
+        "sqlmap", "-u", url,
+        "--technique=BEUSTQ", "--crawl", "3",
+        "--batch", "--threads", "8"
     ]
-    run_command(sqlmap_cmd, f"{OUTPUT_DIR}/sqlmap.txt", "SQLMap")
+    run_command(sqlmap_cmd, f"{OUTPUT_DIR}/sqlmap_{timestamp}.txt", "SQLMap")
 
-    xsstrike_cmd = [
-        "xsstrike",
-        "-u", url,
-        "--crawl"
-    ]
-    run_command(xsstrike_cmd, f"{OUTPUT_DIR}/xsstrike.txt", "XSStrike")
+    xsstrike_cmd = ["xsstrike", "-u", url, "--crawl"]
+    run_command(xsstrike_cmd, f"{OUTPUT_DIR}/xsstrike_{timestamp}.txt", "XSStrike")
 
-def load_output(filename):
+def quick_scan(target):
+    domain = extract_domain(target)
+    timestamp = progress["timestamp"]
+
+    run_command(["whois", domain], f"{OUTPUT_DIR}/whois_{timestamp}.txt", "Whois")
+
+    ip, nslookup_output = get_ip_from_nslookup(domain)
+    with open(f"{OUTPUT_DIR}/nslookup_{timestamp}.txt", "w") as f:
+        f.write(nslookup_output)
+
+    if ip:
+        run_command(["sudo", "masscan", ip, "-p1-1000", "--rate", "1000"], f"{OUTPUT_DIR}/masscan_{timestamp}.txt", "Masscan")
+    else:
+        update_progress("IP resolution failed. Skipping Masscan.")
+        with open(f"{OUTPUT_DIR}/masscan_{timestamp}.txt", "w") as f:
+            f.write("[!] Failed to resolve IP for masscan.\n")
+
+    url = f"https://{domain}" if not target.startswith("http") else target
+    run_command(["whatweb", url], f"{OUTPUT_DIR}/whatweb_{timestamp}.txt", "WhatWeb")
+
+    # Create empty files for tools not used
+    for fname in ["nmap", "sqlmap", "xsstrike", "nuclei", "nuclei.json"]:
+        open(os.path.join(OUTPUT_DIR, f"{fname}_{timestamp}.txt"), 'w').close()
+
+def count_cve_severities():
+    timestamp = progress["timestamp"]
+    counts = {"low": 0, "medium": 0, "high": 0, "critical": 0}
+    try:
+        with open(os.path.join(OUTPUT_DIR, f"nuclei_{timestamp}.json")) as f:
+            data = [json.loads(line) for line in f if line.strip()]
+            severities = [entry.get("info", {}).get("severity", "").lower() for entry in data]
+            counts.update(Counter(severities))
+    except FileNotFoundError:
+        pass
+    return counts
+
+def load_output(tool):
+    filename = f"{tool}_{progress.get('timestamp', 'latest')}.txt"
     try:
         with open(os.path.join(OUTPUT_DIR, filename)) as f:
             return f.read()
     except FileNotFoundError:
-        return f"[!] {filename} not found or failed to generate."
+        return f"[!] {tool} output not found."
 
 @app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
         target = request.form.get("target")
-        if not target:
-            return "Target is required", 400
+        scan_type = request.form.get("scan_type")
+
+        if not target or not scan_type:
+            return "Target and Scan Type are required", 400
 
         clear_output_dir()
         progress["status"] = "Scanning..."
         progress["steps"] = []
+        progress["scan_type"] = scan_type
+        progress["timestamp"] = time.strftime("%Y%m%d_%H%M%S")
 
-        def full_scan():
-            run_recon(target)
-            run_scanning(target)
+        def run_selected_scan():
+            if scan_type == "quick":
+                quick_scan(target)
+            else:
+                run_recon(target)
+                run_cve_scan(target)
+                run_scanning(target)
             progress["status"] = "Completed"
 
-        scan_thread = threading.Thread(target=full_scan)
-        scan_thread.start()
+        threading.Thread(target=run_selected_scan).start()
 
         return render_template("loading.html", target=target)
 
@@ -145,37 +192,55 @@ def progress_status():
 def report():
     context = {
         "target": "Last scanned",
-        "whois": load_output("whois.txt"),
-        "nslookup": load_output("nslookup.txt"),
-        "masscan": load_output("masscan.txt"),
-        "nmap": load_output("nmap.txt"),
-        "whatweb": load_output("whatweb.txt"),
-        "sqlmap": load_output("sqlmap.txt"),
-        "xsstrike": load_output("xsstrike.txt"),
+        "scan_type": progress.get("scan_type", "full"),
+        "whois": load_output("whois"),
+        "nslookup": load_output("nslookup"),
+        "masscan": load_output("masscan"),
+        "nmap": load_output("nmap"),
+        "whatweb": load_output("whatweb"),
+        "sqlmap": load_output("sqlmap"),
+        "xsstrike": load_output("xsstrike"),
+        "cve_counts": count_cve_severities()
     }
     return render_template("report.html", **context)
 
 @app.route("/download/html")
 def download_html():
-    return send_file("templates/report.html", as_attachment=True, download_name="recon_report.html")
+    rendered = render_template("report.html",
+        target="YourTarget",
+        scan_type=progress.get("scan_type", "full"),
+        whois=load_output("whois"),
+        nslookup=load_output("nslookup"),
+        masscan=load_output("masscan"),
+        nmap=load_output("nmap"),
+        whatweb=load_output("whatweb"),
+        sqlmap=load_output("sqlmap"),
+        xsstrike=load_output("xsstrike"),
+        cve_counts=count_cve_severities()
+    )
+    html_path = os.path.join(OUTPUT_DIR, f"report_{progress['timestamp']}.html")
+    with open(html_path, "w") as f:
+        f.write(rendered)
+    return send_file(html_path, as_attachment=True, download_name="recon_report.html")
 
 @app.route("/download/pdf")
 def download_pdf():
     rendered = render_template("report.html",
         target="YourTarget",
-        whois=load_output("whois.txt"),
-        nslookup=load_output("nslookup.txt"),
-        masscan=load_output("masscan.txt"),
-        nmap=load_output("nmap.txt"),
-        whatweb=load_output("whatweb.txt"),
-        sqlmap=load_output("sqlmap.txt"),
-        xsstrike=load_output("xsstrike.txt"),
+        scan_type=progress.get("scan_type", "full"),
+        whois=load_output("whois"),
+        nslookup=load_output("nslookup"),
+        masscan=load_output("masscan"),
+        nmap=load_output("nmap"),
+        whatweb=load_output("whatweb"),
+        sqlmap=load_output("sqlmap"),
+        xsstrike=load_output("xsstrike"),
+        cve_counts=count_cve_severities()
     )
-    pdfkit.from_string(rendered, "output/report.pdf")
-    return send_file("output/report.pdf", as_attachment=True, download_name="recon_report.pdf")
+    pdf_path = os.path.join(OUTPUT_DIR, f"report_{progress['timestamp']}.pdf")
+    pdfkit.from_string(rendered, pdf_path)
+    return send_file(pdf_path, as_attachment=True, download_name="recon_report.pdf")
 
 if __name__ == "__main__":
- app.run(host="0.0.0.0", port=5000, debug=False)
-
-
+    app.run(host="0.0.0.0", port=5000, debug=False)
 
